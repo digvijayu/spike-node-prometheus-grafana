@@ -1,0 +1,126 @@
+# Namespace #
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+---
+# Service Account #
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: monitor
+  namespace: monitoring
+---
+# Cluster role #
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: monitor
+rules:
+  - apiGroups: [""]
+    resources:
+      - nodes
+      - services
+      - endpoints
+      - pods
+    verbs: ["get", "list", "watch"]
+---
+# ClusterRoleBinding #
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: monitor
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: monitor
+subjects:
+  - kind: ServiceAccount
+    name: monitor
+    namespace: monitoring
+---
+# Config map #
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: monitoring
+data:
+  prometheus.yml: |-
+    global:
+      scrape_interval: 15s # scrape every 15 seconds
+      external_labels:
+        monitor: 'cluster'
+
+    scrape_configs:
+    - job_name: 'prometheus'
+      scrape_interval: 5s
+      static_configs:
+      - targets: ['localhost:9090']
+
+    - job_name: 'kubernetes-service-endpoints'
+      kubernetes_sd_configs:
+      - role: endpoints
+      relabel_configs:
+      - action: labelmap
+        regex: __meta_kubernetes_service_label_(.+)
+      - source_labels: [__meta_kubernetes_namespace]
+        action: replace
+        target_label: kubernetes_namespace
+      - source_labels: [__meta_kubernetes_service_name]
+        action: replace
+        target_label: kubernetes_name
+---
+# Prometheus Deployment #
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:latest
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus/"
+            - "--web.enable-lifecycle"
+            - "--storage.tsdb.no-lockfile"
+
+          volumeMounts:
+            - name: prometheus-conf
+              mountPath: /etc/prometheus/
+          ports:
+            - containerPort: 9090
+      volumes:
+        - name: prometheus-conf
+          configMap:
+            defaultMode: 420
+            name: prometheus-config
+      serviceAccountName: monitor
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - name: promui
+      nodePort: 30000
+      protocol: TCP
+      port: 9090
+      targetPort: 9090
+  type: NodePort
