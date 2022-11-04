@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: monitor
+  labels:
+    app: test-node-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-node-app
+  template:
+    metadata:
+      labels:
+        app: test-node-app
+    spec:
+      containers:
+        - name: test-node-app
+          image: local/spike-prometheus-grafana
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /secrets/gcp-credentials.json
+          ports:
+            - containerPort: 8080
+              protocol: TCP

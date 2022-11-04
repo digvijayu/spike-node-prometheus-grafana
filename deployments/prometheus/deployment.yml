@@ -4,6 +4,50 @@ kind: Namespace
 metadata:
   name: monitoring
 ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-node-app
+  namespace: monitoring
+  labels:
+    app: test-node-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-node-app
+  template:
+    metadata:
+      labels:
+        app: test-node-app
+    spec:
+      containers:
+        - name: test-node-app
+          image: local/spike-prometheus-grafana
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /secrets/gcp-credentials.json
+          ports:
+            - containerPort: 3000
+              protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: node-svc
+  namespace: monitoring
+spec:
+  selector:
+    app: test-node-app
+  ports:
+    - name: node-app
+      nodePort: 30001
+      protocol: TCP
+      port: 3000
+      targetPort: 3000
+  type: NodePort
+---
 # Service Account #
 apiVersion: v1
 kind: ServiceAccount
@@ -57,6 +101,11 @@ data:
       scrape_interval: 5s
       static_configs:
       - targets: ['localhost:9090']
+    
+    - job_name: 'node'
+      scrape_interval: 5s
+      static_configs:
+      - targets: ['10.43.44.99:3000']
 
     - job_name: 'kubernetes-service-endpoints'
       kubernetes_sd_configs:
@@ -112,7 +161,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: prometheus
+  name: prometheus-svc
   namespace: monitoring
 spec:
   selector:
@@ -124,3 +173,86 @@ spec:
       port: 9090
       targetPort: 9090
   type: NodePort
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: monitoring
+data:
+  prometheus.yaml: |-
+    {
+        "apiVersion": 1,
+        "datasources": [
+            {
+               "access":"proxy",
+                "editable": true,
+                "name": "prometheus",
+                "orgId": 1,
+                "type": "prometheus",
+                "url": "http://10.43.10.90:9090",
+                "version": 1
+            }
+        ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      name: grafana
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:latest
+          ports:
+            - name: grafana
+              containerPort: 3000
+          resources:
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+            requests:
+              memory: 500M
+              cpu: "500m"
+          volumeMounts:
+            - mountPath: /var/lib/grafana
+              name: grafana-storage
+            - mountPath: /etc/grafana/provisioning/datasources
+              name: grafana-datasources
+              readOnly: false
+      volumes:
+        - name: grafana-storage
+          emptyDir: {}
+        - name: grafana-datasources
+          configMap:
+            defaultMode: 420
+            name: grafana-datasources
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana-svc
+  namespace: monitoring
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "3000"
+spec:
+  selector:
+    app: grafana
+  type: NodePort
+  ports:
+    - port: 3000
+      targetPort: 3000
+      nodePort: 32000
+
